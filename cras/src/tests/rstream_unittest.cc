@@ -124,7 +124,7 @@ TEST_F(RstreamTestSuite, CreateOutput) {
   struct cras_audio_format fmt_ret;
   struct cras_audio_shm *shm_ret;
   struct cras_audio_shm shm_mapped;
-  int rc, fd_ret;
+  int rc, header_fd = -1, samples_fd = -1;
   size_t shm_size;
 
   rc = cras_rstream_create(&config_, &s);
@@ -134,23 +134,24 @@ TEST_F(RstreamTestSuite, CreateOutput) {
   EXPECT_EQ(2048, cras_rstream_get_cb_threshold(s));
   EXPECT_EQ(CRAS_STREAM_TYPE_DEFAULT, cras_rstream_get_type(s));
   EXPECT_EQ(CRAS_STREAM_OUTPUT, cras_rstream_get_direction(s));
-  EXPECT_NE((void *)NULL, cras_rstream_output_shm(s));
+  EXPECT_NE((void*)NULL, cras_rstream_shm(s));
   rc = cras_rstream_get_format(s, &fmt_ret);
   EXPECT_EQ(0, rc);
   EXPECT_TRUE(format_equal(&fmt_ret, &fmt_));
 
   // Check if shm is really set up.
-  shm_ret = cras_rstream_output_shm(s);
+  shm_ret = cras_rstream_shm(s);
   ASSERT_NE((void *)NULL, shm_ret);
-  fd_ret = cras_rstream_output_shm_fd(s);
-  shm_size = cras_rstream_get_total_shm_size(s);
-  EXPECT_GT(shm_size, 4096);
-  shm_mapped.area = (struct cras_audio_shm_area *)mmap(
-      NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_ret, 0);
-  EXPECT_NE((void *)NULL, shm_mapped.area);
+  cras_rstream_get_shm_fds(s, &header_fd, &samples_fd);
+  shm_size = cras_shm_samples_size(shm_ret);
+  EXPECT_EQ(shm_size, 32768);
+  shm_mapped.header = (struct cras_audio_shm_header*)mmap(
+      NULL, cras_shm_header_size(), PROT_READ | PROT_WRITE, MAP_SHARED,
+      header_fd, 0);
+  EXPECT_NE((void*)NULL, shm_mapped.header);
   cras_shm_copy_shared_config(&shm_mapped);
   EXPECT_EQ(cras_shm_used_size(&shm_mapped), cras_shm_used_size(shm_ret));
-  munmap(shm_mapped.area, shm_size);
+  munmap(shm_mapped.header, cras_shm_header_size());
 
   cras_rstream_destroy(s);
 }
@@ -160,7 +161,7 @@ TEST_F(RstreamTestSuite, CreateInput) {
   struct cras_audio_format fmt_ret;
   struct cras_audio_shm *shm_ret;
   struct cras_audio_shm shm_mapped;
-  int rc, fd_ret;
+  int rc, header_fd = -1, samples_fd = -1;
   size_t shm_size;
 
   config_.direction = CRAS_STREAM_INPUT;
@@ -171,23 +172,24 @@ TEST_F(RstreamTestSuite, CreateInput) {
   EXPECT_EQ(2048, cras_rstream_get_cb_threshold(s));
   EXPECT_EQ(CRAS_STREAM_TYPE_DEFAULT, cras_rstream_get_type(s));
   EXPECT_EQ(CRAS_STREAM_INPUT, cras_rstream_get_direction(s));
-  EXPECT_NE((void *)NULL, cras_rstream_input_shm(s));
+  EXPECT_NE((void*)NULL, cras_rstream_shm(s));
   rc = cras_rstream_get_format(s, &fmt_ret);
   EXPECT_EQ(0, rc);
   EXPECT_TRUE(format_equal(&fmt_ret, &fmt_));
 
   // Check if shm is really set up.
-  shm_ret = cras_rstream_input_shm(s);
+  shm_ret = cras_rstream_shm(s);
   ASSERT_NE((void *)NULL, shm_ret);
-  fd_ret = cras_rstream_input_shm_fd(s);
-  shm_size = cras_rstream_get_total_shm_size(s);
-  EXPECT_GT(shm_size, 4096);
-  shm_mapped.area = (struct cras_audio_shm_area *)mmap(
-      NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_ret, 0);
-  EXPECT_NE((void *)NULL, shm_mapped.area);
+  cras_rstream_get_shm_fds(s, &header_fd, &samples_fd);
+  shm_size = cras_shm_samples_size(shm_ret);
+  EXPECT_EQ(shm_size, 32768);
+  shm_mapped.header = (struct cras_audio_shm_header*)mmap(
+      NULL, cras_shm_header_size(), PROT_READ | PROT_WRITE, MAP_SHARED,
+      header_fd, 0);
+  EXPECT_NE((void*)NULL, shm_mapped.header);
   cras_shm_copy_shared_config(&shm_mapped);
   EXPECT_EQ(cras_shm_used_size(&shm_mapped), cras_shm_used_size(shm_ret));
-  munmap(shm_mapped.area, shm_size);
+  munmap(shm_mapped.header, cras_shm_header_size());
 
   cras_rstream_destroy(s);
 }
@@ -417,4 +419,9 @@ struct cras_audio_format *cras_apm_list_get_format(struct cras_apm *apm)
   return NULL;
 }
 #endif
+
+int cras_server_metrics_missed_cb_frequency(const struct cras_rstream *stream)
+{
+  return 0;
+}
 }
