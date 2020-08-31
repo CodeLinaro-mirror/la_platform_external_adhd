@@ -18,24 +18,22 @@ extern "C" {
 #include "cras_playback_rclient.c"
 #include "cras_rclient_util.c"
 }
+static bool audio_format_valid;
 static unsigned int cras_make_fd_nonblocking_called;
 static unsigned int cras_observer_remove_called;
-static unsigned int cras_server_metrics_stream_config_called;
 static int stream_list_add_called;
 static int stream_list_add_return;
 static unsigned int stream_list_rm_called;
 static struct cras_audio_shm dummy_shm;
 static struct cras_rstream dummy_rstream;
-static unsigned int cras_rstream_config_init_with_message_called;
 
 void ResetStubData() {
+  audio_format_valid = true;
   cras_make_fd_nonblocking_called = 0;
   cras_observer_remove_called = 0;
-  cras_server_metrics_stream_config_called = 0;
   stream_list_add_called = 0;
   stream_list_add_return = 0;
   stream_list_rm_called = 0;
-  cras_rstream_config_init_with_message_called = 0;
 }
 
 namespace {
@@ -110,13 +108,12 @@ TEST_F(CPRMessageSuite, StreamConnectMessage) {
   cras_fill_connect_message(&msg, CRAS_STREAM_OUTPUT, stream_id,
                             CRAS_STREAM_TYPE_DEFAULT, CRAS_CLIENT_TYPE_UNKNOWN,
                             480, 240, /*flags=*/0, /*effects=*/0, fmt,
-                            NO_DEVICE, /*client_shm_size=*/0);
+                            NO_DEVICE);
   ASSERT_EQ(stream_id, msg.stream_id);
 
   fd_ = 100;
   rclient_->ops->handle_message_from_client(rclient_, &msg.header, &fd_, 1);
   EXPECT_EQ(1, cras_make_fd_nonblocking_called);
-  EXPECT_EQ(1, cras_rstream_config_init_with_message_called);
   EXPECT_EQ(1, stream_list_add_called);
   EXPECT_EQ(0, stream_list_rm_called);
 
@@ -138,16 +135,14 @@ TEST_F(CPRMessageSuite, StreamConnectMessageInvalidDirection) {
       continue;
     cras_fill_connect_message(&msg, dir, stream_id, CRAS_STREAM_TYPE_DEFAULT,
                               CRAS_CLIENT_TYPE_UNKNOWN, 480, 240, /*flags=*/0,
-                              /*effects=*/0, fmt, NO_DEVICE,
-                              /*client_shm_size=*/0);
+                              /*effects=*/0, fmt, NO_DEVICE);
     ASSERT_EQ(stream_id, msg.stream_id);
 
     fd_ = 100;
     rc = rclient_->ops->handle_message_from_client(rclient_, &msg.header, &fd_,
                                                    1);
-    EXPECT_EQ(-EINVAL, rc);
+    EXPECT_EQ(0, rc);
     EXPECT_EQ(0, cras_make_fd_nonblocking_called);
-    EXPECT_EQ(0, cras_rstream_config_init_with_message_called);
     EXPECT_EQ(0, stream_list_add_called);
     EXPECT_EQ(0, stream_list_rm_called);
 
@@ -167,15 +162,42 @@ TEST_F(CPRMessageSuite, StreamConnectMessageInvalidClientId) {
   cras_fill_connect_message(&msg, CRAS_STREAM_OUTPUT, stream_id,
                             CRAS_STREAM_TYPE_DEFAULT, CRAS_CLIENT_TYPE_UNKNOWN,
                             480, 240, /*flags=*/0, /*effects=*/0, fmt,
-                            NO_DEVICE, /*client_shm_size=*/0);
+                            NO_DEVICE);
   ASSERT_EQ(stream_id, msg.stream_id);
 
   fd_ = 100;
   rc =
       rclient_->ops->handle_message_from_client(rclient_, &msg.header, &fd_, 1);
-  EXPECT_EQ(-EINVAL, rc);
+  EXPECT_EQ(0, rc);
   EXPECT_EQ(0, cras_make_fd_nonblocking_called);
-  EXPECT_EQ(0, cras_rstream_config_init_with_message_called);
+  EXPECT_EQ(0, stream_list_add_called);
+  EXPECT_EQ(0, stream_list_rm_called);
+
+  rc = read(pipe_fds_[0], &out_msg, sizeof(out_msg));
+  EXPECT_EQ(sizeof(out_msg), rc);
+  EXPECT_EQ(-EINVAL, out_msg.err);
+  EXPECT_EQ(stream_id, out_msg.stream_id);
+}
+
+TEST_F(CPRMessageSuite, StreamConnectMessageInvalidAudioFormat) {
+  struct cras_client_stream_connected out_msg;
+  int rc;
+
+  struct cras_connect_message msg;
+  cras_stream_id_t stream_id = 0x10002;
+  cras_fill_connect_message(&msg, CRAS_STREAM_OUTPUT, stream_id,
+                            CRAS_STREAM_TYPE_DEFAULT, CRAS_CLIENT_TYPE_UNKNOWN,
+                            480, 240, /*flags=*/0, /*effects=*/0, fmt,
+                            NO_DEVICE);
+  ASSERT_EQ(stream_id, msg.stream_id);
+
+  audio_format_valid = false;  // stubs out verification failure.
+
+  fd_ = 100;
+  rc =
+      rclient_->ops->handle_message_from_client(rclient_, &msg.header, &fd_, 1);
+  EXPECT_EQ(0, rc);
+  EXPECT_EQ(0, cras_make_fd_nonblocking_called);
   EXPECT_EQ(0, stream_list_add_called);
   EXPECT_EQ(0, stream_list_rm_called);
 
@@ -187,7 +209,7 @@ TEST_F(CPRMessageSuite, StreamConnectMessageInvalidClientId) {
 
 /*
  * TODO(yuhsaun): Remove this test when there are no client uses the old
- * craslib. (CRAS_PROTO_VER = 3)
+ * craslib. (CRAS_PROTO_VER = 5)
  */
 TEST_F(CPRMessageSuite, StreamConnectMessageOldProtocal) {
   struct cras_client_stream_connected out_msg;
@@ -196,7 +218,7 @@ TEST_F(CPRMessageSuite, StreamConnectMessageOldProtocal) {
   struct cras_connect_message_old msg;
   cras_stream_id_t stream_id = 0x10002;
 
-  msg.proto_version = 3;
+  msg.proto_version = 5;
   msg.direction = CRAS_STREAM_OUTPUT;
   msg.stream_id = stream_id;
   msg.stream_type = CRAS_STREAM_TYPE_DEFAULT;
@@ -206,6 +228,8 @@ TEST_F(CPRMessageSuite, StreamConnectMessageOldProtocal) {
   msg.effects = 0;
   pack_cras_audio_format(&msg.format, &fmt);
   msg.dev_idx = NO_DEVICE;
+  msg.client_shm_size = 0;
+  msg.client_type = CRAS_CLIENT_TYPE_TEST;
   msg.header.id = CRAS_SERVER_CONNECT_STREAM;
   msg.header.length = sizeof(struct cras_connect_message_old);
 
@@ -213,7 +237,6 @@ TEST_F(CPRMessageSuite, StreamConnectMessageOldProtocal) {
   rc =
       rclient_->ops->handle_message_from_client(rclient_, &msg.header, &fd_, 1);
   EXPECT_EQ(1, cras_make_fd_nonblocking_called);
-  EXPECT_EQ(1, cras_rstream_config_init_with_message_called);
   EXPECT_EQ(1, stream_list_add_called);
   EXPECT_EQ(0, stream_list_rm_called);
 
@@ -268,11 +291,6 @@ unsigned int cras_rstream_get_effects(const struct cras_rstream* stream) {
   return 0;
 }
 
-int cras_server_metrics_stream_config(struct cras_rstream_config* config) {
-  cras_server_metrics_stream_config_called++;
-  return 0;
-}
-
 int cras_send_with_fds(int sockfd,
                        const void* buf,
                        size_t len,
@@ -316,16 +334,8 @@ int stream_list_add(struct stream_list* list,
   return ret;
 }
 
-void cras_rstream_config_init_with_message(
-    struct cras_rclient* client,
-    const struct cras_connect_message* msg,
-    int* aud_fd,
-    int* client_shm_fd,
-    const struct cras_audio_format* remote_fmt,
-    struct cras_rstream_config* stream_config) {
-  cras_rstream_config_init_with_message_called++;
+bool cras_audio_format_valid(const struct cras_audio_format* fmt) {
+  return audio_format_valid;
 }
-
-void cras_rstream_config_cleanup(struct cras_rstream_config* stream_config) {}
 
 }  // extern "C"

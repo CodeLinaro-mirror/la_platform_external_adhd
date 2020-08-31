@@ -16,11 +16,11 @@
 
 /* Rev when message format changes. If new messages are added, or message ID
  * values change. */
-#define CRAS_PROTO_VER 5
+#define CRAS_PROTO_VER 7
 #define CRAS_SERV_MAX_MSG_SIZE 256
 #define CRAS_CLIENT_MAX_MSG_SIZE 256
 #define CRAS_MAX_HOTWORD_MODELS 243
-#define CRAS_MAX_REMIX_CHANNELS 32
+#define CRAS_MAX_REMIX_CHANNELS 8
 #define CRAS_MAX_TEST_DATA_LEN 224
 #define CRAS_AEC_DUMP_FILE_NAME_LEN 128
 
@@ -34,7 +34,7 @@ enum CRAS_SERVER_MESSAGE_ID {
 	CRAS_SERVER_SET_SYSTEM_MUTE,
 	CRAS_SERVER_SET_USER_MUTE,
 	CRAS_SERVER_SET_SYSTEM_MUTE_LOCKED,
-	CRAS_SERVER_SET_SYSTEM_CAPTURE_GAIN,
+	CRAS_SERVER_SET_SYSTEM_CAPTURE_GAIN, /* Deprecated */
 	CRAS_SERVER_SET_SYSTEM_CAPTURE_MUTE,
 	CRAS_SERVER_SET_SYSTEM_CAPTURE_MUTE_LOCKED,
 	CRAS_SERVER_SET_NODE_ATTR,
@@ -113,15 +113,17 @@ struct __attribute__((__packed__)) cras_connect_message {
 	uint32_t dev_idx; /* device to attach stream, 0 if none */
 	uint64_t effects; /* Bit map of requested effects. */
 	enum CRAS_CLIENT_TYPE client_type; /* chrome, or arc, etc. */
-	uint32_t client_shm_size; /* Size of client-provided samples shm, if any */
+	uint64_t client_shm_size; /* Size of client-provided samples shm, if any */
+	/* Initial values for shm samples buffer offsets. These will be 0 for
+	 * streams that do not use client-provided shm */
+	uint64_t buffer_offsets[2];
 };
 
 /*
- * Old version of connect message without 'cras_type' and 'client_shm_size'
- * defined.
+ * Old version of connect message without 'buffer_offsets'.
  * Used to check against when receiving invalid size of connect message.
- * Expected to have proto_version set to 3.
- * TODO(yuhsuan): remove when all clients migrate to latest libcras.
+ * Expected to have proto_version set to 5.
+ * TODO(fletcherw): remove when all clients migrate to latest libcras.
  */
 struct __attribute__((__packed__)) cras_connect_message_old {
 	struct cras_server_message header;
@@ -135,6 +137,8 @@ struct __attribute__((__packed__)) cras_connect_message_old {
 	struct cras_audio_format_packed format; /* rate, channel, sample size */
 	uint32_t dev_idx; /* device to attach stream, 0 if none */
 	uint64_t effects; /* Bit map of requested effects. */
+	enum CRAS_CLIENT_TYPE client_type; /* chrome, or arc, etc. */
+	uint32_t client_shm_size; /* Size of client-provided samples shm, if any */
 };
 
 static inline void cras_fill_connect_message(
@@ -142,8 +146,7 @@ static inline void cras_fill_connect_message(
 	cras_stream_id_t stream_id, enum CRAS_STREAM_TYPE stream_type,
 	enum CRAS_CLIENT_TYPE client_type, size_t buffer_frames,
 	size_t cb_threshold, uint32_t flags, uint64_t effects,
-	struct cras_audio_format format, uint32_t dev_idx,
-	uint32_t client_shm_size)
+	struct cras_audio_format format, uint32_t dev_idx)
 {
 	m->proto_version = CRAS_PROTO_VER;
 	m->direction = direction;
@@ -156,7 +159,9 @@ static inline void cras_fill_connect_message(
 	pack_cras_audio_format(&m->format, &format);
 	m->dev_idx = dev_idx;
 	m->client_type = client_type;
-	m->client_shm_size = client_shm_size;
+	m->client_shm_size = 0;
+	m->buffer_offsets[0] = 0;
+	m->buffer_offsets[1] = 0;
 	m->header.id = CRAS_SERVER_CONNECT_STREAM;
 	m->header.length = sizeof(struct cras_connect_message);
 }
@@ -192,20 +197,6 @@ static inline void cras_fill_set_system_volume(struct cras_set_system_volume *m,
 {
 	m->volume = volume;
 	m->header.id = CRAS_SERVER_SET_SYSTEM_VOLUME;
-	m->header.length = sizeof(*m);
-}
-
-/* Sets the capture gain. */
-struct __attribute__((__packed__)) cras_set_system_capture_gain {
-	struct cras_server_message header;
-	int32_t gain;
-};
-static inline void
-cras_fill_set_system_capture_gain(struct cras_set_system_capture_gain *m,
-				  long gain)
-{
-	m->gain = gain;
-	m->header.id = CRAS_SERVER_SET_SYSTEM_CAPTURE_GAIN;
 	m->header.length = sizeof(*m);
 }
 
@@ -434,7 +425,7 @@ static inline void cras_fill_suspend_message(struct cras_server_message *m,
 struct __attribute__((__packed__)) cras_config_global_remix {
 	struct cras_server_message header;
 	unsigned int num_channels;
-	float coefficient[CRAS_MAX_REMIX_CHANNELS];
+	float coefficient[CRAS_MAX_REMIX_CHANNELS * CRAS_MAX_REMIX_CHANNELS];
 };
 
 static inline void
@@ -559,8 +550,8 @@ static inline void cras_fill_client_connected(struct cras_client_connected *m,
  * Reply from server that a stream has been successfully added.
  * Two file descriptors are added, input shm followed by out shm.
  *
- * samples_shm_size is shm_max_size for old clients.
- * TODO(fletcherw) remove comment once all clients are on CRAS_PROTO_VER >= 3.
+ * |samples_shm_size| is valid for normal streams, not client-provided
+ * shm streams.
  */
 struct __attribute__((__packed__)) cras_client_stream_connected {
 	struct cras_client_message header;
@@ -580,6 +571,9 @@ cras_fill_client_stream_connected(struct cras_client_stream_connected *m,
 	m->err = err;
 	m->stream_id = stream_id;
 	pack_cras_audio_format(&m->format, format);
+	if (samples_shm_size > UINT32_MAX) {
+		samples_shm_size = UINT32_MAX;
+	}
 	m->samples_shm_size = samples_shm_size;
 	m->effects = effects;
 	m->header.id = CRAS_CLIENT_STREAM_CONNECTED;

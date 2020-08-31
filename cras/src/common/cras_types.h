@@ -48,6 +48,8 @@ enum CRAS_CONNECTION_TYPE {
 	CRAS_CONTROL, // For legacy client.
 	CRAS_PLAYBACK, // For playback client.
 	CRAS_CAPTURE, // For capture client.
+	CRAS_VMS_LEGACY, // For legacy client in vms.
+	CRAS_VMS_UNIFIED, // For unified client in vms.
 	CRAS_NUM_CONN_TYPE,
 };
 
@@ -270,7 +272,8 @@ enum AUDIO_THREAD_LOG_EVENTS {
 	AUDIO_THREAD_FETCH_STREAM,
 	AUDIO_THREAD_STREAM_ADDED,
 	AUDIO_THREAD_STREAM_REMOVED,
-	AUDIO_THREAD_A2DP_ENCODE,
+	AUDIO_THREAD_A2DP_FLUSH,
+	AUDIO_THREAD_A2DP_THROTTLE_TIME,
 	AUDIO_THREAD_A2DP_WRITE,
 	AUDIO_THREAD_DEV_STREAM_MIX,
 	AUDIO_THREAD_CAPTURE_POST,
@@ -296,6 +299,10 @@ enum AUDIO_THREAD_LOG_EVENTS {
 	AUDIO_THREAD_SEVERE_UNDERRUN,
 	AUDIO_THREAD_CAPTURE_DROP_TIME,
 	AUDIO_THREAD_DEV_DROP_FRAMES,
+	AUDIO_THREAD_LOOPBACK_PUT,
+	AUDIO_THREAD_LOOPBACK_GET,
+	AUDIO_THREAD_LOOPBACK_SAMPLE_HOOK,
+	AUDIO_THREAD_DEV_OVERRUN,
 };
 
 /* There are 8 bits of space for events. */
@@ -315,6 +322,7 @@ enum CRAS_BT_LOG_EVENTS {
 	BT_HFP_NEW_CONNECTION,
 	BT_HFP_REQUEST_DISCONNECT,
 	BT_HFP_SUPPORTED_FEATURES,
+	BT_HFP_HF_INDICATOR,
 	BT_HSP_NEW_CONNECTION,
 	BT_HSP_REQUEST_DISCONNECT,
 	BT_NEW_AUDIO_PROFILE_AFTER_CONNECT,
@@ -415,11 +423,14 @@ struct __attribute__((__packed__)) cras_bt_debug_info {
  * or they will be ignored by the handler.
  */
 enum CRAS_AUDIO_THREAD_EVENT_TYPE {
+	AUDIO_THREAD_EVENT_A2DP_OVERRUN,
+	AUDIO_THREAD_EVENT_A2DP_THROTTLE,
 	AUDIO_THREAD_EVENT_BUSYLOOP,
 	AUDIO_THREAD_EVENT_DEBUG,
 	AUDIO_THREAD_EVENT_SEVERE_UNDERRUN,
 	AUDIO_THREAD_EVENT_UNDERRUN,
 	AUDIO_THREAD_EVENT_DROP_SAMPLES,
+	AUDIO_THREAD_EVENT_DEV_OVERRUN,
 	AUDIO_THREAD_EVENT_TYPE_COUNT,
 };
 
@@ -451,16 +462,8 @@ struct __attribute__((__packed__)) cras_audio_thread_snapshot_buffer {
  *    mute_locked - 0 = unlocked, 1 = locked.
  *    suspended - 1 = suspended, 0 = resumed.
  *    capture_gain - Capture gain in dBFS * 100.
- *    capture_gain_target - Target capture gain in dBFS * 100. The actual
- *                          capture gain will be subjected to current
- *                          supported range. When active device/node changes,
- *                          supported range changes accordingly. System state
- *                          should try to re-apply target gain subjected to new
- *                          range.
  *    capture_mute - 0 = unmuted, 1 = muted.
  *    capture_mute_locked - 0 = unlocked, 1 = locked.
- *    min_capture_gain - Min allowed capture gain in dBFS * 100.
- *    max_capture_gain - Max allowed capture gain in dBFS * 100.
  *    num_streams_attached - Total number of streams since server started.
  *    num_output_devs - Number of available output devices.
  *    num_input_devs - Number of available input devices.
@@ -502,11 +505,8 @@ struct __attribute__((packed, aligned(4))) cras_server_state {
 	int32_t mute_locked;
 	int32_t suspended;
 	int32_t capture_gain;
-	int32_t capture_gain_target;
 	int32_t capture_mute;
 	int32_t capture_mute_locked;
-	int32_t min_capture_gain;
-	int32_t max_capture_gain;
 	uint32_t num_streams_attached;
 	uint32_t num_output_devs;
 	uint32_t num_input_devs;
@@ -595,12 +595,16 @@ enum CRAS_NODE_TYPE {
 	CRAS_NODE_TYPE_HOTWORD,
 	CRAS_NODE_TYPE_POST_MIX_PRE_DSP,
 	CRAS_NODE_TYPE_POST_DSP,
+	/* Type for the legacy BT narrow band mic .*/
+	CRAS_NODE_TYPE_BLUETOOTH_NB_MIC,
 	/* These value can be used for both output and input nodes. */
 	CRAS_NODE_TYPE_USB,
 	CRAS_NODE_TYPE_BLUETOOTH,
 	CRAS_NODE_TYPE_FALLBACK_NORMAL,
 	CRAS_NODE_TYPE_FALLBACK_ABNORMAL,
 	CRAS_NODE_TYPE_UNKNOWN,
+	CRAS_NODE_TYPE_ECHO_REFERENCE,
+	CRAS_NODE_TYPE_ALSA_LOOPBACK,
 };
 
 /* Position values to described where a node locates on the system.

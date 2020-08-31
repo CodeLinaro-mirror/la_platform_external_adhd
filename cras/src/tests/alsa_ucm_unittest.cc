@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
-#include <iniparser.h>
 #include <stdio.h>
 #include <syslog.h>
 
@@ -269,8 +268,8 @@ TEST(AlsaUcm, GetDevForJack) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=JackName/Dev1/HiFi";
-  std::string id_2 = "=JackName/Dev2/HiFi";
+  std::string id_1 = "=JackDev/Dev1/HiFi";
+  std::string id_2 = "=JackDev/Dev2/HiFi";
   std::string value_1 = "Value1";
   std::string value_2 = "Value2";
 
@@ -296,8 +295,8 @@ TEST(AlsaUcm, GetDevForHeadphoneJack) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=JackName/Mic/HiFi";
-  std::string id_2 = "=JackName/Headphone/HiFi";
+  std::string id_1 = "=JackDev/Mic/HiFi";
+  std::string id_2 = "=JackDev/Headphone/HiFi";
   std::string value = "JackValue";
 
   snd_use_case_get_value[id_1] = value;
@@ -322,8 +321,8 @@ TEST(AlsaUcm, GetDevForMicJack) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=JackName/Headphone/HiFi";
-  std::string id_2 = "=JackName/Mic/HiFi";
+  std::string id_1 = "=JackDev/Headphone/HiFi";
+  std::string id_2 = "=JackDev/Mic/HiFi";
   std::string value = "JackValue";
 
   snd_use_case_get_value[id_1] = value;
@@ -348,8 +347,8 @@ TEST(AlsaUcm, GetDevForMixer) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=MixerName/Dev1/HiFi";
-  std::string id_2 = "=MixerName/Dev2/HiFi";
+  std::string id_1 = "=PlaybackMixerElem/Dev1/HiFi";
+  std::string id_2 = "=CaptureMixerElem/Dev2/HiFi";
   std::string value_1 = "Value1";
   std::string value_2 = "Value2";
 
@@ -368,9 +367,8 @@ TEST(AlsaUcm, GetDevForMixer) {
   free((void*)dev_name_in);
 }
 
-TEST(AlsaUcm, GetDeviceNameForDevice) {
+TEST(AlsaUcm, GetAlsaDeviceIndexForDevice) {
   struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
-  const char *input_dev_name, *output_dev_name;
   const char* devices[] = {"Dev1", "Comment for Dev1", "Dev2",
                            "Comment for Dev2"};
 
@@ -380,24 +378,17 @@ TEST(AlsaUcm, GetDeviceNameForDevice) {
   fake_list_size["_devices/HiFi"] = 4;
   std::string id_1 = "=CapturePCM/Dev1/HiFi";
   std::string id_2 = "=PlaybackPCM/Dev2/HiFi";
-  std::string value_1 = "DeviceName1";
-  std::string value_2 = "DeviceName2";
+  std::string value_1 = "PCMName,1";
+  std::string value_2 = "PCMName,2";
 
   snd_use_case_get_value[id_1] = value_1;
   snd_use_case_get_value[id_2] = value_2;
-  input_dev_name = ucm_get_device_name_for_dev(mgr, "Dev1", CRAS_STREAM_INPUT);
-  output_dev_name =
-      ucm_get_device_name_for_dev(mgr, "Dev2", CRAS_STREAM_OUTPUT);
-  ASSERT_TRUE(input_dev_name);
-  ASSERT_TRUE(output_dev_name);
-  EXPECT_EQ(0, strcmp(input_dev_name, value_1.c_str()));
-  EXPECT_EQ(0, strcmp(output_dev_name, value_2.c_str()));
+  EXPECT_EQ(1, ucm_get_alsa_dev_idx_for_dev(mgr, "Dev1", CRAS_STREAM_INPUT));
+  EXPECT_EQ(2, ucm_get_alsa_dev_idx_for_dev(mgr, "Dev2", CRAS_STREAM_OUTPUT));
 
   ASSERT_EQ(2, snd_use_case_get_called);
   EXPECT_EQ(snd_use_case_get_id[0], id_1);
   EXPECT_EQ(snd_use_case_get_id[1], id_2);
-  free((void*)input_dev_name);
-  free((void*)output_dev_name);
 }
 
 TEST(AlsaUcm, GetDeviceRateForDevice) {
@@ -422,6 +413,38 @@ TEST(AlsaUcm, GetDeviceRateForDevice) {
       ucm_get_sample_rate_for_dev(mgr, "Dev2", CRAS_STREAM_OUTPUT);
   EXPECT_EQ(44100, input_dev_rate);
   EXPECT_EQ(48000, output_dev_rate);
+
+  ASSERT_EQ(2, snd_use_case_get_called);
+  EXPECT_EQ(snd_use_case_get_id[0], id_1);
+  EXPECT_EQ(snd_use_case_get_id[1], id_2);
+}
+
+TEST(AlsaUcm, GetDeviceChannelsForDevice) {
+  struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
+  int rc;
+  size_t input_dev_channels, output_dev_channels;
+  const char* devices[] = {"Dev1", "Comment for Dev1", "Dev2",
+                           "Comment for Dev2"};
+
+  ResetStubData();
+
+  fake_list["_devices/HiFi"] = devices;
+  fake_list_size["_devices/HiFi"] = 4;
+  std::string id_1 = "=CaptureChannels/Dev1/HiFi";
+  std::string id_2 = "=PlaybackChannels/Dev2/HiFi";
+  std::string value_1 = "4";
+  std::string value_2 = "8";
+
+  snd_use_case_get_value[id_1] = value_1;
+  snd_use_case_get_value[id_2] = value_2;
+  rc = ucm_get_channels_for_dev(mgr, "Dev1", CRAS_STREAM_INPUT,
+                                &input_dev_channels);
+  EXPECT_EQ(0, rc);
+  EXPECT_EQ(4, input_dev_channels);
+  rc = ucm_get_channels_for_dev(mgr, "Dev2", CRAS_STREAM_OUTPUT,
+                                &output_dev_channels);
+  EXPECT_EQ(0, rc);
+  EXPECT_EQ(8, output_dev_channels);
 
   ASSERT_EQ(2, snd_use_case_get_called);
   EXPECT_EQ(snd_use_case_get_id[0], id_1);
@@ -767,56 +790,6 @@ TEST(AlsaUcm, FreeMixerNames) {
   mixer_name_free(mixer_names_1);
 }
 
-TEST(AlsaUcm, MaxSoftwareGain) {
-  struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
-  long max_software_gain;
-  int ret;
-  std::string id = "=MaxSoftwareGain/Internal Mic/HiFi";
-  std::string value = "2000";
-
-  ResetStubData();
-
-  /* Value can be found in UCM. */
-  snd_use_case_get_value[id] = value;
-
-  ret = ucm_get_max_software_gain(mgr, "Internal Mic", &max_software_gain);
-
-  EXPECT_EQ(0, ret);
-  EXPECT_EQ(2000, max_software_gain);
-
-  ResetStubData();
-
-  /* Value can not be found in UCM. */
-  ret = ucm_get_max_software_gain(mgr, "Internal Mic", &max_software_gain);
-
-  ASSERT_TRUE(ret);
-}
-
-TEST(AlsaUcm, MinSoftwareGain) {
-  struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
-  long min_software_gain;
-  int ret;
-  std::string id = "=MinSoftwareGain/Internal Mic/HiFi";
-  std::string value = "2000";
-
-  ResetStubData();
-
-  /* Value can be found in UCM. */
-  snd_use_case_get_value[id] = value;
-
-  ret = ucm_get_min_software_gain(mgr, "Internal Mic", &min_software_gain);
-
-  EXPECT_EQ(0, ret);
-  EXPECT_EQ(2000, min_software_gain);
-
-  ResetStubData();
-
-  /* Value can not be found in UCM. */
-  ret = ucm_get_min_software_gain(mgr, "Internal Mic", &min_software_gain);
-
-  ASSERT_TRUE(ret);
-}
-
 TEST(AlsaUcm, DefaultNodeGain) {
   struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
   long default_node_gain;
@@ -838,6 +811,31 @@ TEST(AlsaUcm, DefaultNodeGain) {
 
   /* Value can not be found in UCM. */
   ret = ucm_get_default_node_gain(mgr, "Internal Mic", &default_node_gain);
+
+  ASSERT_TRUE(ret);
+}
+
+TEST(AlsaUcm, IntrinsicSensitivity) {
+  struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
+  long intrinsic_vol;
+  int ret;
+  std::string id = "=IntrinsicSensitivity/Internal Mic/HiFi";
+  std::string value = "-2000";
+
+  ResetStubData();
+
+  /* Value can be found in UCM. */
+  snd_use_case_get_value[id] = value;
+
+  ret = ucm_get_intrinsic_sensitivity(mgr, "Internal Mic", &intrinsic_vol);
+
+  EXPECT_EQ(0, ret);
+  EXPECT_EQ(-2000, intrinsic_vol);
+
+  ResetStubData();
+
+  /* Value can not be found in UCM. */
+  ret = ucm_get_intrinsic_sensitivity(mgr, "Internal Mic", &intrinsic_vol);
 
   ASSERT_TRUE(ret);
 }
@@ -896,15 +894,15 @@ TEST(AlsaUcm, GetMixerNameForDevice) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=MixerName/Dev1/HiFi";
-  std::string id_2 = "=MixerName/Dev2/HiFi";
+  std::string id_1 = "=PlaybackMixerElem/Dev1/HiFi";
+  std::string id_2 = "=CaptureMixerElem/Dev2/HiFi";
   std::string value_1 = "MixerName1";
   std::string value_2 = "MixerName2";
 
   snd_use_case_get_value[id_1] = value_1;
   snd_use_case_get_value[id_2] = value_2;
-  mixer_name_1 = ucm_get_mixer_name_for_dev(mgr, "Dev1");
-  mixer_name_2 = ucm_get_mixer_name_for_dev(mgr, "Dev2");
+  mixer_name_1 = ucm_get_playback_mixer_elem_for_dev(mgr, "Dev1");
+  mixer_name_2 = ucm_get_capture_mixer_elem_for_dev(mgr, "Dev2");
 
   EXPECT_EQ(0, strcmp(mixer_name_1, value_1.c_str()));
   EXPECT_EQ(0, strcmp(mixer_name_2, value_2.c_str()));
@@ -990,7 +988,7 @@ TEST(AlsaUcm, ListSectionsByDeviceNameInput) {
   EXPECT_EQ(callback_arg, list_devices_callback_args[1]);
 }
 
-TEST(AlsaUcm, GetJackNameForDevice) {
+TEST(AlsaUcm, GetJackDevForDevice) {
   struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
   const char *jack_name_1, *jack_name_2;
   const char* devices[] = {"Dev1", "Comment for Dev1", "Dev2",
@@ -1000,12 +998,12 @@ TEST(AlsaUcm, GetJackNameForDevice) {
 
   fake_list["_devices/HiFi"] = devices;
   fake_list_size["_devices/HiFi"] = 4;
-  std::string id_1 = "=JackName/Dev1/HiFi";
-  std::string value_1 = "JackName1";
+  std::string id_1 = "=JackDev/Dev1/HiFi";
+  std::string value_1 = "JackDev1";
 
   snd_use_case_get_value[id_1] = value_1;
-  jack_name_1 = ucm_get_jack_name_for_dev(mgr, "Dev1");
-  jack_name_2 = ucm_get_jack_name_for_dev(mgr, "Dev2");
+  jack_name_1 = ucm_get_jack_dev_for_dev(mgr, "Dev1");
+  jack_name_2 = ucm_get_jack_dev_for_dev(mgr, "Dev2");
 
   EXPECT_EQ(0, strcmp(jack_name_1, value_1.c_str()));
   EXPECT_EQ(NULL, jack_name_2);
@@ -1014,43 +1012,28 @@ TEST(AlsaUcm, GetJackNameForDevice) {
   free((void*)jack_name_2);
 }
 
-TEST(AlsaUcm, GetJackTypeForDevice) {
+TEST(AlsaUcm, GetJackControlForDevice) {
   struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
-  const char *jack_type_1, *jack_type_2, *jack_type_3, *jack_type_4;
-  const char* devices[] = {
-      "Dev1", "Comment for Dev1", "Dev2", "Comment for Dev2",
-      "Dev3", "Comment for Dev3", "Dev4", "Comment for Dev4"};
+  const char *jack_name_1, *jack_name_2;
+  const char* devices[] = {"Dev1", "Comment for Dev1", "Dev2",
+                           "Comment for Dev2"};
 
   ResetStubData();
 
   fake_list["_devices/HiFi"] = devices;
-  fake_list_size["_devices/HiFi"] = 8;
-  std::string id_1 = "=JackType/Dev1/HiFi";
-  std::string value_1 = "hctl";
-  std::string id_2 = "=JackType/Dev2/HiFi";
-  std::string value_2 = "gpio";
-  std::string id_3 = "=JackType/Dev3/HiFi";
-  std::string value_3 = "something";
+  fake_list_size["_devices/HiFi"] = 4;
+  std::string id_1 = "=JackControl/Dev1/HiFi";
+  std::string value_1 = "JackControl1";
 
   snd_use_case_get_value[id_1] = value_1;
-  snd_use_case_get_value[id_2] = value_2;
-  snd_use_case_get_value[id_3] = value_3;
+  jack_name_1 = ucm_get_jack_control_for_dev(mgr, "Dev1");
+  jack_name_2 = ucm_get_jack_control_for_dev(mgr, "Dev2");
 
-  jack_type_1 = ucm_get_jack_type_for_dev(mgr, "Dev1");
-  jack_type_2 = ucm_get_jack_type_for_dev(mgr, "Dev2");
-  jack_type_3 = ucm_get_jack_type_for_dev(mgr, "Dev3");
-  jack_type_4 = ucm_get_jack_type_for_dev(mgr, "Dev4");
+  EXPECT_EQ(0, strcmp(jack_name_1, value_1.c_str()));
+  EXPECT_EQ(NULL, jack_name_2);
 
-  /* Only "hctl" and "gpio" are valid types. */
-  EXPECT_EQ(0, strcmp(jack_type_1, value_1.c_str()));
-  EXPECT_EQ(0, strcmp(jack_type_2, value_2.c_str()));
-  EXPECT_EQ(NULL, jack_type_3);
-  EXPECT_EQ(NULL, jack_type_4);
-
-  free((void*)jack_type_1);
-  free((void*)jack_type_2);
-  free((void*)jack_type_3);
-  free((void*)jack_type_4);
+  free((void*)jack_name_1);
+  free((void*)jack_name_2);
 }
 
 TEST(AlsaUcm, GetPeriodFramesForDevice) {
@@ -1076,7 +1059,6 @@ TEST(AlsaUcm, GetPeriodFramesForDevice) {
   dma_period_2 = ucm_get_dma_period_for_dev(mgr, "Dev2");
   dma_period_3 = ucm_get_dma_period_for_dev(mgr, "Dev3");
 
-  /* Only "hctl" and "gpio" are valid types. */
   EXPECT_EQ(1000, dma_period_1);
   EXPECT_EQ(0, dma_period_2);
   EXPECT_EQ(0, dma_period_3);
@@ -1088,18 +1070,22 @@ TEST(AlsaUcm, UcmSection) {
   struct mixer_name* controls = NULL;
   struct mixer_name* m_name;
   int dev_idx = 0;
+  int dependent_dev_idx = -1;
   size_t i;
   enum CRAS_STREAM_DIRECTION dir = CRAS_STREAM_OUTPUT;
   static const char* name = "Headphone";
+  static const char* pcm_name = "hw:0,1";
   static const char* jack_name = "my-card-name Headset Jack";
   static const char* jack_type = "gpio";
   static const char* mixer_name = "Control1";
   static const char* coupled_names[] = {"Coupled1", "Coupled2"};
 
-  section = ucm_section_create(NULL, 0, CRAS_STREAM_OUTPUT, NULL, NULL);
+  section =
+      ucm_section_create(NULL, NULL, 0, -1, CRAS_STREAM_OUTPUT, NULL, NULL);
   EXPECT_EQ(reinterpret_cast<struct ucm_section*>(NULL), section);
 
-  section = ucm_section_create(name, dev_idx, dir, jack_name, jack_type);
+  section = ucm_section_create(name, pcm_name, dev_idx, dependent_dev_idx, dir,
+                               jack_name, jack_type);
   EXPECT_NE(reinterpret_cast<struct ucm_section*>(NULL), section);
   EXPECT_NE(name, section->name);
   EXPECT_EQ(0, strcmp(name, section->name));
@@ -1161,8 +1147,7 @@ TEST(AlsaUcm, GetSections) {
                            "Internal Mic", "Internal Microphones",
                            "HDMI",         "HDMI output"};
   const char* ids[] = {"=PlaybackPCM/Headphone/HiFi",
-                       "=JackName/Headphone/HiFi",
-                       "=JackType/Headphone/HiFi",
+                       "=JackDev/Headphone/HiFi",
                        "=JackSwitch/Headphone/HiFi",
                        "=CoupledMixers/Headphone/HiFi",
 
@@ -1170,23 +1155,21 @@ TEST(AlsaUcm, GetSections) {
                        "=CoupledMixers/Speaker/HiFi",
 
                        "=CapturePCM/Mic/HiFi",
-                       "=JackName/Mic/HiFi",
-                       "=JackType/Mic/HiFi",
+                       "=JackDev/Mic/HiFi",
                        "=JackSwitch/Mic/HiFi",
-                       "=MixerName/Mic/HiFi",
+                       "=CaptureMixerElem/Mic/HiFi",
 
                        "=CapturePCM/Internal Mic/HiFi",
                        "=CoupledMixers/Internal Mic/HiFi",
                        "=JackSwitch/Internal Mic/HiFi",
 
                        "=PlaybackPCM/HDMI/HiFi",
-                       "=MixerName/HDMI/HiFi",
+                       "=PlaybackMixerElem/HDMI/HiFi",
 
                        NULL};
   const char* values[] = {
       "hw:my-sound-card,0",
       "my-sound-card Headset Jack",
-      "gpio",
       "2",
       "HP-L,HP-R",
 
@@ -1195,7 +1178,6 @@ TEST(AlsaUcm, GetSections) {
 
       "hw:my-sound-card,0",
       "my-sound-card Headset Jack",
-      "gpio",
       "0",
       "CAPTURE",
 
@@ -1228,7 +1210,7 @@ TEST(AlsaUcm, GetSections) {
   EXPECT_EQ(0, section->dev_idx);
   EXPECT_EQ(CRAS_STREAM_OUTPUT, section->dir);
   EXPECT_EQ(0, strcmp(section->jack_name, values[1]));
-  EXPECT_EQ(0, strcmp(section->jack_type, values[2]));
+  EXPECT_EQ(0, strcmp(section->jack_type, "gpio"));
   EXPECT_EQ(NULL, section->mixer_name);
   ASSERT_NE((struct mixer_name*)NULL, section->coupled);
   m_name = section->coupled;
@@ -1260,7 +1242,7 @@ TEST(AlsaUcm, GetSections) {
   EXPECT_EQ(0, section->dev_idx);
   EXPECT_EQ(CRAS_STREAM_INPUT, section->dir);
   EXPECT_EQ(0, strcmp(section->jack_name, values[1]));
-  EXPECT_EQ(0, strcmp(section->jack_type, values[2]));
+  EXPECT_EQ(0, strcmp(section->jack_type, "gpio"));
   EXPECT_EQ(0, section->jack_switch);
   ASSERT_NE((const char*)NULL, section->mixer_name);
   EXPECT_EQ(0, strcmp(section->mixer_name, "CAPTURE"));
@@ -1301,37 +1283,9 @@ TEST(AlsaUcm, GetSectionsMissingPCM) {
   struct ucm_section* sections;
   int i = 0;
   const char* devices[] = {"Headphone", "The headphones jack."};
-  const char* ids[] = {"=JackName/Headphone/HiFi",
+  const char* ids[] = {"=JackDev/Headphone/HiFi",
                        "=CoupledMixers/Headphone/HiFi", NULL};
   const char* values[] = {
-      "my-sound-card Headset Jack",
-      "HP-L,HP-R",
-  };
-
-  ResetStubData();
-
-  fake_list["_devices/HiFi"] = devices;
-  fake_list_size["_devices/HiFi"] = ARRAY_SIZE(devices);
-
-  while (ids[i]) {
-    snd_use_case_get_value[ids[i]] = values[i];
-    i++;
-  }
-
-  sections = ucm_get_sections(mgr);
-  EXPECT_EQ(NULL, sections);
-}
-
-TEST(AlsaUcm, GetSectionsBadPCM) {
-  struct cras_use_case_mgr* mgr = &cras_ucm_mgr;
-  struct ucm_section* sections;
-  int i = 0;
-  const char* devices[] = {"Headphone", "The headphones jack."};
-  const char* ids[] = {"=PlaybackPCM/Headphone/HiFi",
-                       "=JackName/Headphone/HiFi",
-                       "=CoupledMixers/Headphone/HiFi", NULL};
-  const char* values[] = {
-      "hw:my-sound-card:0",
       "my-sound-card Headset Jack",
       "HP-L,HP-R",
   };

@@ -194,6 +194,12 @@ struct cras_iodev *test_iodev_create(enum CRAS_STREAM_DIRECTION direction,
 	iodev->put_buffer = put_buffer;
 	iodev->update_active_node = update_active_node;
 
+	/*
+	 * Record max supported channels into cras_iodev_info.
+	 * The value is the max of test_supported_channel_counts.
+	 */
+	iodev->info.max_supported_channels = 1;
+
 	/* Create a dummy ionode */
 	node = (struct cras_ionode *)calloc(1, sizeof(*node));
 	node->dev = iodev;
@@ -204,7 +210,7 @@ struct cras_iodev *test_iodev_create(enum CRAS_STREAM_DIRECTION direction,
 		node->type = CRAS_NODE_TYPE_UNKNOWN;
 	node->volume = 100;
 	node->software_volume_needed = 0;
-	node->max_software_gain = 0;
+	node->ui_gain_scaler = 1.0f;
 	strcpy(node->name, "(default)");
 	cras_iodev_add_node(iodev, node);
 	cras_iodev_set_active_node(iodev, node);

@@ -27,6 +27,7 @@ struct audio_thread_event_log* atlog;
 #include "rstream_stub.h"
 
 static float dev_stream_capture_software_gain_scaler_val;
+static float input_data_get_software_gain_scaler_val;
 static unsigned int dev_stream_capture_avail_ret = 480;
 
 namespace {
@@ -74,20 +75,24 @@ TEST_F(DevIoSuite, CaptureGain) {
                                 CRAS_NODE_TYPE_MIC);
 
   dev->dev->state = CRAS_IODEV_STATE_NORMAL_RUN;
-  dev->dev->software_gain_scaler = 0.99f;
   iodev_stub_frames_queued(dev->dev.get(), 20, ts);
   DL_APPEND(dev_list, dev->odev.get());
   add_stream_to_dev(dev->dev, stream);
 
-  /* For stream that uses APM, always apply gain scaler 1.0f regardless of
-   * what node/stream gains are. */
-  stream->rstream->apm_list = reinterpret_cast<struct cras_apm_list*>(0xf0f);
+  /* The applied scaler gain should match what is reported by input_data. */
+  dev->dev->active_node->ui_gain_scaler = 1.0f;
+  input_data_get_software_gain_scaler_val = 1.0f;
   dev_io_capture(&dev_list);
   EXPECT_EQ(1.0f, dev_stream_capture_software_gain_scaler_val);
 
-  stream->rstream->apm_list = 0x0;
+  input_data_get_software_gain_scaler_val = 0.99f;
   dev_io_capture(&dev_list);
   EXPECT_EQ(0.99f, dev_stream_capture_software_gain_scaler_val);
+
+  dev->dev->active_node->ui_gain_scaler = 0.6f;
+  input_data_get_software_gain_scaler_val = 0.7f;
+  dev_io_capture(&dev_list);
+  EXPECT_FLOAT_EQ(0.42f, dev_stream_capture_software_gain_scaler_val);
 }
 
 /*
@@ -186,6 +191,50 @@ TEST_F(DevIoSuite, SendCapturedNoNeedToResetDevices) {
   EXPECT_EQ(false, rc);
 }
 
+/*
+ * On loopback and hotword devices, if any hw_level is larger than
+ *  1.5 * largest_cb_level and DROP_FRAMES_THRESHOLD_MS, do nothing.
+ */
+TEST_F(DevIoSuite, SendCapturedNoNeedToDrop) {
+  struct timespec start;
+  struct timespec drop_time;
+  struct open_dev* dev_list = NULL;
+  bool rc;
+
+  clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+  AddFakeDataToStream(stream.get(), 0);
+
+  DevicePtr dev1 =
+      create_device(CRAS_STREAM_INPUT, 480, &format, CRAS_NODE_TYPE_HOTWORD);
+  DevicePtr dev2 = create_device(CRAS_STREAM_INPUT, 480, &format,
+                                 CRAS_NODE_TYPE_POST_MIX_PRE_DSP);
+  DevicePtr dev3 =
+      create_device(CRAS_STREAM_INPUT, 480, &format, CRAS_NODE_TYPE_POST_DSP);
+
+  DL_APPEND(dev_list, dev1->odev.get());
+  DL_APPEND(dev_list, dev2->odev.get());
+  DL_APPEND(dev_list, dev3->odev.get());
+
+  add_stream_to_dev(dev1->dev, stream);
+  add_stream_to_dev(dev2->dev, stream);
+  add_stream_to_dev(dev3->dev, stream);
+
+  iodev_stub_frames_queued(dev1->dev.get(), 4800, start);
+  iodev_stub_frames_queued(dev2->dev.get(), 4800, start);
+  iodev_stub_frames_queued(dev2->dev.get(), 4800, start);
+
+  EXPECT_EQ(0, dev_io_send_captured_samples(dev_list));
+
+  rc = iodev_stub_get_drop_time(dev1->dev.get(), &drop_time);
+  EXPECT_EQ(false, rc);
+
+  rc = iodev_stub_get_drop_time(dev2->dev.get(), &drop_time);
+  EXPECT_EQ(false, rc);
+
+  rc = iodev_stub_get_drop_time(dev3->dev.get(), &drop_time);
+  EXPECT_EQ(false, rc);
+}
+
 /* Stubs */
 extern "C" {
 
@@ -202,6 +251,12 @@ int input_data_put_for_stream(struct input_data* data,
                               struct buffer_share* offsets,
                               unsigned int frames) {
   return 0;
+}
+
+float input_data_get_software_gain_scaler(struct input_data* data,
+                                          float idev_sw_gain_scaler,
+                                          struct cras_rstream* stream) {
+  return input_data_get_software_gain_scaler_val;
 }
 
 int cras_audio_thread_event_drop_samples() {

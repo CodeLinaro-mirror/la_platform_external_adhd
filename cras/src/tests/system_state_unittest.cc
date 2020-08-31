@@ -4,9 +4,11 @@
 
 #include <gtest/gtest.h>
 #include <stdio.h>
+#include <string.h>
 
 extern "C" {
 #include "cras_alert.h"
+#include "cras_board_config.h"
 #include "cras_shm.h"
 #include "cras_system_state.h"
 #include "cras_types.h"
@@ -33,10 +35,10 @@ static char* device_config_dir;
 static const char* cras_alsa_card_config_dir;
 static size_t cras_observer_notify_output_volume_called;
 static size_t cras_observer_notify_output_mute_called;
-static size_t cras_observer_notify_capture_gain_called;
 static size_t cras_observer_notify_capture_mute_called;
 static size_t cras_observer_notify_suspend_changed_called;
 static size_t cras_observer_notify_num_active_streams_called;
+static struct cras_board_config fake_board_config;
 
 static void ResetStubData() {
   cras_alsa_card_create_called = 0;
@@ -53,15 +55,16 @@ static void ResetStubData() {
   cras_alsa_card_config_dir = NULL;
   cras_observer_notify_output_volume_called = 0;
   cras_observer_notify_output_mute_called = 0;
-  cras_observer_notify_capture_gain_called = 0;
   cras_observer_notify_capture_mute_called = 0;
   cras_observer_notify_suspend_changed_called = 0;
   cras_observer_notify_num_active_streams_called = 0;
+  memset(&fake_board_config, 0, sizeof(fake_board_config));
 }
 
 static int add_stub(int fd,
-                    void (*cb)(void* data),
+                    void (*cb)(void* data, int revents),
                     void* callback_data,
+                    int events,
                     void* select_data) {
   add_stub_called++;
   select_data_value = select_data;
@@ -81,7 +84,11 @@ static int add_task_stub(void (*cb)(void* data),
   return 0;
 }
 
-static void callback_stub(void* data) {
+static void callback_stub(void* data, int revents) {
+  callback_stub_called++;
+}
+
+static void task_stub(void* data) {
   callback_stub_called++;
 }
 
@@ -103,7 +110,6 @@ static void do_sys_init() {
 TEST(SystemStateSuite, DefaultVolume) {
   do_sys_init();
   EXPECT_EQ(100, cras_system_get_volume());
-  EXPECT_EQ(2000, cras_system_get_capture_gain());
   EXPECT_EQ(0, cras_system_get_mute());
   EXPECT_EQ(0, cras_system_get_capture_mute());
   cras_system_state_deinit();
@@ -128,46 +134,6 @@ TEST(SystemStateSuite, SetMinMaxVolume) {
   cras_system_set_volume_limits(-10000, -600);
   EXPECT_EQ(-10000, cras_system_get_min_volume());
   EXPECT_EQ(-600, cras_system_get_max_volume());
-  cras_system_state_deinit();
-}
-
-TEST(SystemStateSuite, SetCaptureVolume) {
-  do_sys_init();
-  cras_system_set_capture_gain(0);
-  EXPECT_EQ(0, cras_system_get_capture_gain());
-  cras_system_set_capture_gain(3000);
-  EXPECT_EQ(3000, cras_system_get_capture_gain());
-  // Check that it is limited to the minimum allowed gain.
-  cras_system_set_capture_gain(-10000);
-  EXPECT_EQ(-5000, cras_system_get_capture_gain());
-  cras_system_state_deinit();
-  EXPECT_EQ(3, cras_observer_notify_capture_gain_called);
-}
-
-TEST(SystemStateSuite, SetCaptureVolumeStoreTarget) {
-  do_sys_init();
-  cras_system_set_capture_gain_limits(-2000, 2000);
-  cras_system_set_capture_gain(3000);
-  // Gain is within the limit.
-  EXPECT_EQ(2000, cras_system_get_capture_gain());
-
-  // Assume the range is changed.
-  cras_system_set_capture_gain_limits(-4000, 4000);
-
-  // Gain is also changed because target gain is re-applied.
-  EXPECT_EQ(3000, cras_system_get_capture_gain());
-
-  cras_system_state_deinit();
-}
-
-TEST(SystemStateSuite, SetMinMaxCaptureGain) {
-  do_sys_init();
-  cras_system_set_capture_gain(3000);
-  cras_system_set_capture_gain_limits(-2000, 2000);
-  EXPECT_EQ(-2000, cras_system_get_min_capture_gain());
-  EXPECT_EQ(2000, cras_system_get_max_capture_gain());
-  // Current gain is adjusted for range.
-  EXPECT_EQ(2000, cras_system_get_capture_gain());
   cras_system_state_deinit();
 }
 
@@ -357,7 +323,7 @@ TEST(SystemSettingsRegisterSelectDescriptor, AddSelectFd) {
 
   ResetStubData();
   do_sys_init();
-  rc = cras_system_add_select_fd(7, callback_stub, stub_data);
+  rc = cras_system_add_select_fd(7, callback_stub, stub_data, POLLIN);
   EXPECT_NE(0, rc);
   EXPECT_EQ(0, add_stub_called);
   EXPECT_EQ(0, rm_stub_called);
@@ -369,7 +335,7 @@ TEST(SystemSettingsRegisterSelectDescriptor, AddSelectFd) {
   EXPECT_EQ(-EEXIST, rc);
   EXPECT_EQ(0, add_stub_called);
   EXPECT_EQ(0, rm_stub_called);
-  rc = cras_system_add_select_fd(7, callback_stub, stub_data);
+  rc = cras_system_add_select_fd(7, callback_stub, stub_data, POLLIN);
   EXPECT_EQ(0, rc);
   EXPECT_EQ(1, add_stub_called);
   EXPECT_EQ(select_data, select_data_value);
@@ -386,13 +352,13 @@ TEST(SystemSettingsAddTask, AddTask) {
   int rc;
 
   do_sys_init();
-  rc = cras_system_add_task(callback_stub, stub_data);
+  rc = cras_system_add_task(task_stub, stub_data);
   EXPECT_NE(0, rc);
   EXPECT_EQ(0, add_task_stub_called);
   rc = cras_system_set_add_task_handler(add_task_stub, task_data);
   EXPECT_EQ(0, rc);
   EXPECT_EQ(0, add_task_stub_called);
-  rc = cras_system_add_task(callback_stub, stub_data);
+  rc = cras_system_add_task(task_stub, stub_data);
   EXPECT_EQ(0, rc);
   EXPECT_EQ(1, add_task_stub_called);
   EXPECT_EQ(task_data, task_data_value);
@@ -448,12 +414,23 @@ TEST(SystemSettingsStreamCount, StreamCountByDirection) {
   cras_system_state_deinit();
 }
 
+TEST(SystemStateSuite, IgnoreUCMSuffix) {
+  fake_board_config.ucm_ignore_suffix = strdup("TEST1,TEST2,TEST3");
+  do_sys_init();
+
+  EXPECT_EQ(1, cras_system_check_ignore_ucm_suffix("TEST1"));
+  EXPECT_EQ(1, cras_system_check_ignore_ucm_suffix("TEST2"));
+  EXPECT_EQ(1, cras_system_check_ignore_ucm_suffix("TEST3"));
+  EXPECT_EQ(0, cras_system_check_ignore_ucm_suffix("TEST4"));
+  cras_system_state_deinit();
+}
+
 extern "C" {
 
 struct cras_alsa_card* cras_alsa_card_create(
     struct cras_alsa_card_info* info,
     const char* device_config_dir,
-    struct cras_device_blacklist* blacklist) {
+    struct cras_device_blocklist* blocklist) {
   cras_alsa_card_create_called++;
   cras_alsa_card_config_dir = device_config_dir;
   return kFakeAlsaCard;
@@ -467,12 +444,12 @@ size_t cras_alsa_card_get_index(const struct cras_alsa_card* alsa_card) {
   return 0;
 }
 
-struct cras_device_blacklist* cras_device_blacklist_create(
+struct cras_device_blocklist* cras_device_blocklist_create(
     const char* config_path) {
   return NULL;
 }
 
-void cras_device_blacklist_destroy(struct cras_device_blacklist* blacklist) {}
+void cras_device_blocklist_destroy(struct cras_device_blocklist* blocklist) {}
 
 struct cras_alert* cras_alert_create(cras_alert_prepare prepare,
                                      unsigned int flags) {
@@ -521,10 +498,6 @@ void cras_observer_notify_output_mute(int muted,
   cras_observer_notify_output_mute_called++;
 }
 
-void cras_observer_notify_capture_gain(int32_t gain) {
-  cras_observer_notify_capture_gain_called++;
-}
-
 void cras_observer_notify_capture_mute(int muted, int mute_locked) {
   cras_observer_notify_capture_mute_called++;
 }
@@ -536,6 +509,11 @@ void cras_observer_notify_suspend_changed(int suspended) {
 void cras_observer_notify_num_active_streams(enum CRAS_STREAM_DIRECTION dir,
                                              uint32_t num_active_streams) {
   cras_observer_notify_num_active_streams_called++;
+}
+
+void cras_board_config_get(const char* config_path,
+                           struct cras_board_config* board_config) {
+  *board_config = fake_board_config;
 }
 
 }  // extern "C"

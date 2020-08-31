@@ -13,36 +13,122 @@
 //! the samples written to it are committed to the `PlaybackBufferStream` it came from.
 //!
 //! ```
-//! use audio_streams::{StreamSource, DummyStreamSource};
+//! use audio_streams::{BoxError, SampleFormat, StreamSource, DummyStreamSource};
 //! use std::io::Write;
 //!
 //! const buffer_size: usize = 120;
 //! const num_channels: usize = 2;
-//! const frame_size: usize = num_channels * 2; // 16-bit samples are two bytes.
 //!
-//! # fn main() -> std::result::Result<(), Box<std::error::Error>> {
+//! # fn main() -> std::result::Result<(), BoxError> {
 //! let mut stream_source = DummyStreamSource::new();
+//! let sample_format = SampleFormat::S16LE;
+//! let frame_size = num_channels * sample_format.sample_bytes();
 //!
 //! let (_, mut stream) = stream_source
-//!     .new_playback_stream(num_channels, 48000, buffer_size)?;
+//!     .new_playback_stream(num_channels, sample_format, 48000, buffer_size)?;
 //! // Play 10 buffers of DC.
-//! let pb_bufs = [[0xa5u8; buffer_size * frame_size]; 10];
-//! for pb_buf in &pb_bufs {
+//! let mut buf = Vec::new();
+//! buf.resize(buffer_size * frame_size, 0xa5u8);
+//! for _ in 0..10 {
 //!     let mut stream_buffer = stream.next_playback_buffer()?;
-//!     assert_eq!(stream_buffer.write(pb_buf)?, buffer_size * frame_size);
+//!     assert_eq!(stream_buffer.write(&buf)?, buffer_size * frame_size);
 //! }
 //! # Ok (())
 //! # }
 //! ```
 
+use std::cmp::min;
 use std::error;
 use std::fmt::{self, Display};
 use std::io::{self, Write};
 use std::os::unix::io::RawFd;
 use std::result::Result;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum SampleFormat {
+    U8,
+    S16LE,
+    S24LE,
+    S32LE,
+}
+
+impl SampleFormat {
+    pub fn sample_bytes(&self) -> usize {
+        use SampleFormat::*;
+        match self {
+            U8 => 1,
+            S16LE => 2,
+            S24LE => 4, // Not a typo, S24_LE samples are stored in 4 byte chunks.
+            S32LE => 4,
+        }
+    }
+}
+
+impl Display for SampleFormat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use SampleFormat::*;
+        match self {
+            U8 => write!(f, "Unsigned 8 bit"),
+            S16LE => write!(f, "Signed 16 bit Little Endian"),
+            S24LE => write!(f, "Signed 24 bit Little Endian"),
+            S32LE => write!(f, "Signed 32 bit Little Endian"),
+        }
+    }
+}
+
+/// Valid directions of an audio stream.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum StreamDirection {
+    Playback,
+    Capture,
+}
+
+/// Valid effects for an audio stream.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum StreamEffect {
+    NoEffect,
+    EchoCancellation,
+}
+
 pub mod capture;
+pub mod shm_streams;
+
+impl Default for StreamEffect {
+    fn default() -> Self {
+        StreamEffect::NoEffect
+    }
+}
+
+/// Errors that can pass across threads.
+pub type BoxError = Box<dyn error::Error + Send + Sync>;
+
+/// Errors that are possible from a `StreamEffect`.
+#[derive(Debug)]
+pub enum StreamEffectError {
+    InvalidEffect,
+}
+
+impl error::Error for StreamEffectError {}
+
+impl Display for StreamEffectError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            StreamEffectError::InvalidEffect => write!(f, "Must be in [EchoCancellation, aec]"),
+        }
+    }
+}
+
+impl FromStr for StreamEffect {
+    type Err = StreamEffectError;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "EchoCancellation" | "aec" => Ok(StreamEffect::EchoCancellation),
+            _ => Err(StreamEffectError::InvalidEffect),
+        }
+    }
+}
 
 /// `StreamSource` creates streams for playback or capture of audio.
 pub trait StreamSource: Send {
@@ -51,9 +137,10 @@ pub trait StreamSource: Send {
     fn new_playback_stream(
         &mut self,
         num_channels: usize,
+        format: SampleFormat,
         frame_rate: usize,
         buffer_size: usize,
-    ) -> Result<(Box<dyn StreamControl>, Box<dyn PlaybackBufferStream>), Box<dyn error::Error>>;
+    ) -> Result<(Box<dyn StreamControl>, Box<dyn PlaybackBufferStream>), BoxError>;
 
     /// Returns a stream control and buffer generator object. These are separate as the buffer
     /// generator might want to be passed to the audio stream.
@@ -61,6 +148,7 @@ pub trait StreamSource: Send {
     fn new_capture_stream(
         &mut self,
         num_channels: usize,
+        format: SampleFormat,
         frame_rate: usize,
         buffer_size: usize,
     ) -> Result<
@@ -68,12 +156,13 @@ pub trait StreamSource: Send {
             Box<dyn StreamControl>,
             Box<dyn capture::CaptureBufferStream>,
         ),
-        Box<dyn error::Error>,
+        BoxError,
     > {
         Ok((
             Box::new(DummyStreamControl::new()),
             Box::new(capture::DummyCaptureStream::new(
                 num_channels,
+                format,
                 frame_rate,
                 buffer_size,
             )),
@@ -89,7 +178,7 @@ pub trait StreamSource: Send {
 
 /// `PlaybackBufferStream` provides `PlaybackBuffer`s to fill with audio samples for playback.
 pub trait PlaybackBufferStream: Send {
-    fn next_playback_buffer<'a>(&'a mut self) -> Result<PlaybackBuffer<'a>, Box<dyn error::Error>>;
+    fn next_playback_buffer(&mut self) -> Result<PlaybackBuffer, BoxError>;
 }
 
 /// `StreamControl` provides a way to set the volume and mute states of a stream. `StreamControl`
@@ -172,7 +261,10 @@ impl<'a> PlaybackBuffer<'a> {
     /// Writes up to `size` bytes directly to this buffer inside of the given callback function.
     pub fn copy_cb<F: FnOnce(&mut [u8])>(&mut self, size: usize, cb: F) {
         // only write complete frames.
-        let len = size / self.buffer.frame_size * self.buffer.frame_size;
+        let len = min(
+            size / self.buffer.frame_size * self.buffer.frame_size,
+            self.buffer.buffer.len() - self.buffer.offset,
+        );
         cb(&mut self.buffer.buffer[self.buffer.offset..(self.buffer.offset + len)]);
         self.buffer.offset += len;
     }
@@ -223,10 +315,13 @@ impl BufferDrop for DummyBufferDrop {
 }
 
 impl DummyStream {
-    // TODO(allow other formats)
-    pub fn new(num_channels: usize, frame_rate: usize, buffer_size: usize) -> Self {
-        const S16LE_SIZE: usize = 2;
-        let frame_size = S16LE_SIZE * num_channels;
+    pub fn new(
+        num_channels: usize,
+        format: SampleFormat,
+        frame_rate: usize,
+        buffer_size: usize,
+    ) -> Self {
+        let frame_size = format.sample_bytes() * num_channels;
         let interval = Duration::from_millis(buffer_size as u64 * 1000 / frame_rate as u64);
         DummyStream {
             buffer: vec![0; buffer_size * frame_size],
@@ -242,7 +337,7 @@ impl DummyStream {
 }
 
 impl PlaybackBufferStream for DummyStream {
-    fn next_playback_buffer<'a>(&'a mut self) -> Result<PlaybackBuffer<'a>, Box<dyn error::Error>> {
+    fn next_playback_buffer(&mut self) -> Result<PlaybackBuffer, BoxError> {
         if let Some(start_time) = self.start_time {
             if start_time.elapsed() < self.next_frame {
                 std::thread::sleep(self.next_frame - start_time.elapsed());
@@ -286,13 +381,18 @@ impl StreamSource for DummyStreamSource {
     fn new_playback_stream(
         &mut self,
         num_channels: usize,
+        format: SampleFormat,
         frame_rate: usize,
         buffer_size: usize,
-    ) -> Result<(Box<dyn StreamControl>, Box<dyn PlaybackBufferStream>), Box<dyn error::Error>>
-    {
+    ) -> Result<(Box<dyn StreamControl>, Box<dyn PlaybackBufferStream>), BoxError> {
         Ok((
             Box::new(DummyStreamControl::new()),
-            Box::new(DummyStream::new(num_channels, frame_rate, buffer_size)),
+            Box::new(DummyStream::new(
+                num_channels,
+                format,
+                frame_rate,
+                buffer_size,
+            )),
         ))
     }
 }
@@ -334,7 +434,9 @@ mod tests {
     #[test]
     fn sixteen_bit_stereo() {
         let mut server = DummyStreamSource::new();
-        let (_, mut stream) = server.new_playback_stream(2, 48000, 480).unwrap();
+        let (_, mut stream) = server
+            .new_playback_stream(2, SampleFormat::S16LE, 48000, 480)
+            .unwrap();
         let mut stream_buffer = stream.next_playback_buffer().unwrap();
         assert_eq!(stream_buffer.frame_capacity(), 480);
         let pb_buf = [0xa5u8; 480 * 2 * 2];
@@ -344,7 +446,9 @@ mod tests {
     #[test]
     fn consumption_rate() {
         let mut server = DummyStreamSource::new();
-        let (_, mut stream) = server.new_playback_stream(2, 48000, 480).unwrap();
+        let (_, mut stream) = server
+            .new_playback_stream(2, SampleFormat::S16LE, 48000, 480)
+            .unwrap();
         let start = Instant::now();
         {
             let mut stream_buffer = stream.next_playback_buffer().unwrap();

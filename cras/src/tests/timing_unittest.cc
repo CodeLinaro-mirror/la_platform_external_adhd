@@ -93,10 +93,9 @@ class TimingSuite : public testing::Test {
     // Set response for frames_queued.
     iodev_stub_frames_queued(dev->dev.get(), dev_level, *level_timestamp);
 
-    struct timespec dev_time, now;
+    struct timespec dev_time;
     dev_time.tv_sec = level_timestamp->tv_sec + 500;  // Far in the future.
-    clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-    dev_io_next_output_wake(&dev_list_, &dev_time, &now);
+    dev_io_next_output_wake(&dev_list_, &dev_time);
     return dev_time;
   }
 };
@@ -1163,6 +1162,12 @@ int input_data_put_for_stream(struct input_data* data,
   return 0;
 }
 
+float input_data_get_software_gain_scaler(struct input_data* data,
+                                          float idev_sw_gain_scaler,
+                                          struct cras_rstream* stream) {
+  return 1.0;
+}
+
 struct cras_audio_format* cras_rstream_post_processing_format(
     const struct cras_rstream* stream,
     void* dev_ptr) {
@@ -1172,7 +1177,11 @@ struct cras_audio_format* cras_rstream_post_processing_format(
 int cras_audio_thread_event_drop_samples() {
   return 0;
 }
-
+void* buffer_share_get_data(const struct buffer_share* mix, unsigned int id) {
+  return NULL;
+};
+void cras_apm_list_start_apm(struct cras_apm_list* list, void* dev_ptr){};
+void cras_apm_list_stop_apm(struct cras_apm_list* list, void* dev_ptr){};
 }  // extern "C"
 
 }  //  namespace
