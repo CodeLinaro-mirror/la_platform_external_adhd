@@ -306,7 +306,7 @@ int hfp_info_running(struct hfp_info* info) {
   return hfp_info_running_return_val;
 }
 
-int hfp_info_start(int fd, unsigned int mtu, struct hfp_info* info) {
+int hfp_info_start(int fd, unsigned int mtu, int codec, struct hfp_info* info) {
   hfp_info_start_called++;
   return 0;
 }
@@ -360,6 +360,10 @@ void cras_iodev_free_resources(struct cras_iodev* iodev) {
   cras_iodev_free_resources_called++;
 }
 
+int cras_iodev_fill_odev_zeros(struct cras_iodev* odev, unsigned int frames) {
+  return 0;
+}
+
 void cras_audio_area_config_buf_pointers(struct cras_audio_area* area,
                                          const struct cras_audio_format* fmt,
                                          uint8_t* base_buffer) {
@@ -376,6 +380,18 @@ int hfp_event_speaker_gain(struct hfp_slc_handle* handle, int gain) {
 
 int hfp_slc_get_selected_codec(struct hfp_slc_handle* handle) {
   return HFP_CODEC_ID_CVSD;
+}
+
+bool hfp_slc_get_wideband_speech_supported(struct hfp_slc_handle* handle) {
+  return false;
+}
+
+int hfp_slc_codec_connection_setup(struct hfp_slc_handle* handle) {
+  return 0;
+}
+
+int hfp_slc_is_hsp(struct hfp_slc_handle* handle) {
+  return 0;
 }
 
 }  // extern "C"

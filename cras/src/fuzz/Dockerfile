@@ -1,17 +1,17 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium OS Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
 # Defines a docker image that can build cras fuzzers.
 #
 FROM gcr.io/oss-fuzz-base/base-builder
+LABEL maintainer="dgreid@chromium.org"
 
 RUN apt-get -y update && \
       apt-get install -y \
       automake \
       build-essential \
       cmake \
-      ctags \
       g++ \
       gdb \
       git \
@@ -25,7 +25,8 @@ RUN apt-get -y update && \
       libspeexdsp-dev \
       libtool \
       libudev-dev \
-      wget
+      wget \
+      zip
 RUN apt-get clean
 RUN cd /tmp && git clone https://github.com/ndevilla/iniparser.git && \
       cd iniparser && \
@@ -52,6 +53,6 @@ RUN mkdir -p /tmp/alsa-build && cd /tmp/alsa-build && \
       make -j$(nproc) all && \
       make install
 
-
-COPY . /src/cras/
-COPY src/fuzz/build.sh /src/
+COPY . "${SRC}/adhd"
+COPY cras/src/fuzz/build.sh "${SRC}/build.sh"
+RUN mkdir -p /etc/cras && cp "${SRC}/adhd/cras-config/dsp.ini.sample" /etc/cras

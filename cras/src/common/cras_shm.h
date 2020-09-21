@@ -59,7 +59,7 @@ struct __attribute__((__packed__)) cras_audio_shm_header {
 	int32_t callback_pending;
 	uint32_t num_overruns;
 	struct cras_timespec ts;
-	uint32_t buffer_offset[CRAS_NUM_SHM_BUFFERS];
+	uint64_t buffer_offset[CRAS_NUM_SHM_BUFFERS];
 };
 
 /* Returns the number of bytes needed to hold a cras_audio_shm_header. */
@@ -146,6 +146,8 @@ struct cras_audio_shm {
  * samples_prot - the mapping protections to use when mapping samples. Allowed
  *                values are PROT_READ or PROT_WRITE.
  * shm_out - pointer where the created cras_audio_shm will be stored.
+ *
+ * Returns 0 on success or a negative error code on failure.
  */
 int cras_audio_shm_create(struct cras_shm_info *header_info,
 			  struct cras_shm_info *samples_info, int samples_prot,
@@ -582,7 +584,7 @@ static inline unsigned cras_shm_used_frames(const struct cras_audio_shm *shm)
 }
 
 /* Returns the size of the samples shm region. */
-static inline unsigned cras_shm_samples_size(const struct cras_audio_shm *shm)
+static inline uint64_t cras_shm_samples_size(const struct cras_audio_shm *shm)
 {
 	return shm->samples_info.length;
 }

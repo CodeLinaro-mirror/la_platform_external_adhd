@@ -23,7 +23,6 @@
 #include "cras_system_state.h"
 #include "cras_types.h"
 #include "cras_util.h"
-#include "stream_list.h"
 #include "utlist.h"
 
 /* Handles dumping audio thread debug info back to the client. */
@@ -271,7 +270,14 @@ static int direction_valid(enum CRAS_STREAM_DIRECTION direction)
 }
 
 /* Entry point for handling a message from the client.  Called from the main
- * server context. */
+ * server context.
+ *
+ * If the message from clients has incorrect length (truncated message), return
+ * an error up to CRAS server.
+ * If the message from clients has invalid content, should return the errors to
+ * clients by send_message_to_client and return 0 here.
+ *
+ */
 static int ccr_handle_message_from_client(struct cras_rclient *client,
 					  const struct cras_server_message *msg,
 					  int *fds, unsigned int num_fds)
@@ -293,16 +299,17 @@ static int ccr_handle_message_from_client(struct cras_rclient *client,
 		int client_shm_fd = num_fds > 1 ? fds[1] : -1;
 		struct cras_connect_message cmsg;
 		if (MSG_LEN_VALID(msg, struct cras_connect_message)) {
-			return rclient_handle_client_stream_connect(
+			rclient_handle_client_stream_connect(
 				client,
 				(const struct cras_connect_message *)msg, fd,
 				client_shm_fd);
 		} else if (!convert_connect_message_old(msg, &cmsg)) {
-			return rclient_handle_client_stream_connect(
-				client, &cmsg, fd, client_shm_fd);
+			rclient_handle_client_stream_connect(client, &cmsg, fd,
+							     client_shm_fd);
 		} else {
 			return -EINVAL;
 		}
+		break;
 	}
 	case CRAS_SERVER_DISCONNECT_STREAM:
 		if (!MSG_LEN_VALID(msg, struct cras_disconnect_stream_message))
@@ -335,14 +342,6 @@ static int ccr_handle_message_from_client(struct cras_rclient *client,
 		cras_system_set_mute_locked(
 			((const struct cras_set_system_mute *)msg)->mute);
 		break;
-	case CRAS_SERVER_SET_SYSTEM_CAPTURE_GAIN: {
-		const struct cras_set_system_capture_gain *m =
-			(const struct cras_set_system_capture_gain *)msg;
-		if (!MSG_LEN_VALID(msg, struct cras_set_system_capture_gain))
-			return -EINVAL;
-		cras_system_set_capture_gain(m->gain);
-		break;
-	}
 	case CRAS_SERVER_SET_SYSTEM_CAPTURE_MUTE:
 		if (!MSG_LEN_VALID(msg, struct cras_set_system_mute))
 			return -EINVAL;
@@ -458,17 +457,33 @@ static int ccr_handle_message_from_client(struct cras_rclient *client,
 	case CRAS_CONFIG_GLOBAL_REMIX: {
 		const struct cras_config_global_remix *m =
 			(const struct cras_config_global_remix *)msg;
+		float *coefficient;
+
 		if (!MSG_LEN_VALID(msg, struct cras_config_global_remix) ||
 		    m->num_channels > CRAS_MAX_REMIX_CHANNELS)
 			return -EINVAL;
-		size_t size_with_coefficients =
-			sizeof(*m) + m->num_channels * m->num_channels *
-					     sizeof(m->coefficient[0]);
+		const size_t coefficient_len =
+			m->num_channels * m->num_channels;
+		const size_t size_with_coefficients =
+			sizeof(*m) +
+			coefficient_len * sizeof(m->coefficient[0]);
 		if (size_with_coefficients != msg->length)
 			return -EINVAL;
+
+		coefficient =
+			(float *)calloc(coefficient_len, sizeof(coefficient));
+		if (!coefficient) {
+			syslog(LOG_ERR,
+			       "Failed to create local coefficient array.");
+			break;
+		}
+		memcpy(coefficient, m->coefficient,
+		       coefficient_len * sizeof(coefficient));
+
 		audio_thread_config_global_remix(
 			cras_iodev_list_get_audio_thread(), m->num_channels,
-			m->coefficient);
+			coefficient);
+		free(coefficient);
 		break;
 	}
 	case CRAS_SERVER_GET_HOTWORD_MODELS: {
@@ -531,25 +546,11 @@ static const struct cras_rclient_ops cras_control_rclient_ops = {
  * the conneciton has succeeded. */
 struct cras_rclient *cras_control_rclient_create(int fd, size_t id)
 {
-	struct cras_rclient *client;
-	struct cras_client_connected msg;
-	int state_fd;
-
-	client = (struct cras_rclient *)calloc(1, sizeof(struct cras_rclient));
-	if (!client)
-		return NULL;
-
-	client->fd = fd;
-	client->id = id;
-	client->ops = &cras_control_rclient_ops;
-	client->supported_directions = CRAS_STREAM_ALL_DIRECTION;
-	/* Filters CRAS_STREAM_UNDEFINED stream out. */
-	client->supported_directions ^=
+	/* Supports all directions but not CRAS_STREAM_UNDEFINED. */
+	int supported_directions =
+		CRAS_STREAM_ALL_DIRECTION ^
 		cras_stream_direction_mask(CRAS_STREAM_UNDEFINED);
 
-	cras_fill_client_connected(&msg, client->id);
-	state_fd = cras_sys_state_shm_fd();
-	client->ops->send_message_to_client(client, &msg.header, &state_fd, 1);
-
-	return client;
+	return rclient_generic_create(fd, id, &cras_control_rclient_ops,
+				      supported_directions);
 }
